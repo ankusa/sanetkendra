@@ -1,6 +1,12 @@
 name: Update live jobs
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/update-jobs.yml"
+      - "tools/Update-Notice.ps1"
   schedule:
     # 08:15 India time (02:45 UTC) every day.
     - cron: "45 2 * * *"
