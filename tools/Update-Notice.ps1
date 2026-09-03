@@ -444,16 +444,17 @@ try {
         $html = $html.Replace('</script></body></html>', "if(new URLSearchParams(location.search).has('autoprint')){window.addEventListener('load',()=>setTimeout(()=>window.print(),1200));}</script></body></html>")
     }
     $portraitPrintFix = @'
-<style id="print-layout-v22">
-@page{size:210mm 297mm;margin:5mm}
-.toolbar{width:200mm}
-.sheet{width:200mm;height:287mm;padding:3mm 4mm;grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr) 48mm auto;gap:2mm}
-.head{grid-column:1}.head h1{font-size:22pt}.content{grid-row:2}.section{font-size:13pt}
+<style id="print-layout-v23">
+@page{size:297mm 210mm;margin:5mm}
+.toolbar{width:287mm}
+.sheet{width:287mm;height:200mm;padding:3mm 4mm;grid-template-columns:minmax(0,1fr) 43mm;grid-template-rows:auto minmax(0,1fr) auto;gap:2mm}
+.section{display:none}
+.content{grid-template-rows:minmax(0,1fr)}
 .jobs{height:100%;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));gap:3mm}
 .jobs li{padding:4mm;font-size:30pt;line-height:1.08}.last-date{font-size:.52em}
-.side{grid-row:3;border-left:0;border-top:1.5px solid #000;padding:2mm 0 0;display:grid;grid-template-columns:minmax(0,1fr) 38mm minmax(0,1fr);grid-template-rows:auto auto;column-gap:4mm;text-align:left}
-.side h2{grid-column:1;grid-row:1/-1;align-self:center;font-size:17pt;margin:0}.qr,.qr-fallback{grid-column:2;grid-row:1/-1;width:36mm;height:36mm;align-self:center}.scan{grid-column:3;grid-row:1;align-self:end;font-size:15pt;margin:0 0 1mm}.all{grid-column:3;grid-row:2;align-self:start;font-size:11pt;margin:0}.foot{grid-column:1;font-size:9pt}
-@media print{html,body{width:200mm;height:287mm}.sheet{width:200mm;height:287mm;padding:3mm 4mm;margin:0}}
+.side{border-left:1.5px solid #000;border-top:0;padding:0 0 0 2.5mm;display:flex;text-align:center}
+.side h2{font-size:14pt;margin:0 0 2mm}.qr,.qr-fallback{width:36mm;height:36mm}.scan{font-size:13pt;margin:2mm 0}.all{font-size:9.5pt;margin-top:1.5mm}.foot{grid-column:1/-1;font-size:9pt}
+@media print{html,body{width:287mm;height:200mm}.sheet{width:287mm;height:200mm;padding:3mm 4mm;margin:0}}
 </style>
 '@
     $html = $html.Replace('</head>', "$portraitPrintFix</head>")
