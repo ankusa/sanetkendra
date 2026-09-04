@@ -79,7 +79,7 @@ function Get-EntryType([string]$Title) {
 }
 
 function New-JobEntry([string]$Title, [string]$Url, [string]$LastDate = "", [string]$Vacancies = "") {
-    return [pscustomobject]@{ Title = $Title; Url = (Resolve-JobUrl $Url); LastDate = $LastDate; Vacancies = $Vacancies; EntryType = (Get-EntryType $Title) }
+    return [pscustomobject]@{ Title = $Title; Url = (Resolve-JobUrl $Url); LastDate = $LastDate; Vacancies = $Vacancies; EntryType = (Get-EntryType $Title); Qualification = ""; QualificationRank = 99; SourceOrder = 9999 }
 }
 
 function Get-AligarhAudienceScore($Entry) {
@@ -137,6 +137,7 @@ function ConvertTo-CardHtml($Entry) {
     $url = [System.Net.WebUtility]::HtmlEncode([string]$Entry.Url)
     $meta = @()
     if ($entryType) { $meta += $entryType }
+    if ($Entry.Qualification) { $meta += "योग्यता: $([System.Net.WebUtility]::HtmlEncode([string]$Entry.Qualification))" }
     if ($vacancies -and $Entry.EntryType -eq 'भर्ती') { $meta += "कुल पद: $vacancies" }
     if ($lastDate) { $meta += "अंतिम तिथि: $lastDate" }
     $text = if ($meta.Count -gt 0) { "$title <span class=`"last-date`">$($meta -join ' | ')</span>" } else { $title }
@@ -211,9 +212,25 @@ function Get-VerifiedJobInfo([string]$Html) {
         }
     }
     $verifiedDate = if ($dates.Count -gt 0) { @($dates | Sort-Object -Descending)[0] } else { $null }
+    $qualification = ""
+    $qualificationRank = 99
+    if ($plain -match '(?i)\b(?:class\s*)?10(?:th)?\b|high\s*school|matric(?:ulation)?') {
+        $qualification = "10वीं"
+        $qualificationRank = 1
+    }
+    elseif ($plain -match '(?i)\b(?:class\s*)?12(?:th)?\b|10\s*\+\s*2|intermediate') {
+        $qualification = "12वीं"
+        $qualificationRank = 2
+    }
+    elseif ($plain -match '(?i)\bgraduate|graduation|bachelor(?:''s)?\s+degree|b\.?(?:a|sc|com|tech|e)\.?\b') {
+        $qualification = "Graduation"
+        $qualificationRank = 3
+    }
     return [pscustomobject]@{
         LastDate = $verifiedDate
         Vacancies = (Get-VacancyCount $plain)
+        Qualification = $qualification
+        QualificationRank = $qualificationRank
     }
 }
 
@@ -254,6 +271,8 @@ function Get-VerifiedLiveJobs($Entries) {
                 continue
             }
             $entry.LastDate = $info.LastDate.ToString('dd-MM-yyyy')
+            $entry.Qualification = $info.Qualification
+            $entry.QualificationRank = $info.QualificationRank
             if ($entry.EntryType -eq 'भर्ती') {
                 if ($info.Vacancies) { $entry.Vacancies = $info.Vacancies }
                 elseif (-not $entry.Vacancies -and $index.ContainsKey($entry.Url)) { $entry.Vacancies = $index[$entry.Url] }
@@ -387,6 +406,7 @@ try {
             }
         }
         $titles = @($allEntries | Group-Object Url | ForEach-Object { $_.Group[0] } | Select-Object -First $MaxItems)
+        for ($sourceIndex = 0; $sourceIndex -lt $titles.Count; $sourceIndex++) { $titles[$sourceIndex].SourceOrder = $sourceIndex }
     }
     if ($titles.Count -eq 0) {
         $savedNotice = if (Test-Path $CacheFile) { $CacheFile } elseif (Test-Path $OutputFile) { $OutputFile } else { $null }
@@ -410,25 +430,23 @@ try {
     [System.IO.File]::WriteAllText($WebJobsFile, $webHtml, [System.Text.UTF8Encoding]::new($true))
     $qrReady = Update-QrCode $WebJobsUrl
 
-    # Notice board: normally 2 popular All-India + 2 Aligarh/UP recruitments.
-    # If one group has fewer live forms, the best eligible job fills the space.
-    # The QR web page above still contains every verified live job/exam/form.
-    $sortedRecruitments = @($titles | Where-Object { $_.EntryType -eq 'भर्ती' } | Sort-Object @{Expression={ Get-AligarhAudienceScore $_ }; Descending=$true}, @{Expression={
-        try { [datetime]::ParseExact($_.LastDate,'dd-MM-yyyy',[System.Globalization.CultureInfo]::InvariantCulture) } catch { [datetime]::MaxValue }
-    }}, Title)
-    $indiaJobs = @($sortedRecruitments | Where-Object { (Get-NoticeAudienceBucket $_) -eq 'INDIA' } | Select-Object -First 2)
-    $upJobs = @($sortedRecruitments | Where-Object { (Get-NoticeAudienceBucket $_) -in @('ALIGARH','UP') } | Select-Object -First 2)
+    # Notice board: latest broad-entry recruitment in qualification order.
+    # First reserve one slot each for 10th, 12th and Graduation; the fourth
+    # slot is the next newest useful job from those same qualification groups.
+    # The QR web page above still contains every verified live form.
+    $sortedRecruitments = @($titles | Where-Object {
+        $_.EntryType -eq 'भर्ती' -and $_.QualificationRank -in @(1,2,3) -and (Get-NoticeAudienceBucket $_) -ne 'OTHER-STATE'
+    } | Sort-Object SourceOrder, QualificationRank, @{Expression={ Get-AligarhAudienceScore $_ }; Descending=$true})
     $noticeList = [System.Collections.Generic.List[object]]::new()
-    for ($slot = 0; $slot -lt 2; $slot++) {
-        if ($slot -lt $indiaJobs.Count) { $noticeList.Add($indiaJobs[$slot]) }
-        if ($slot -lt $upJobs.Count) { $noticeList.Add($upJobs[$slot]) }
+    foreach ($rank in @(1,2,3)) {
+        $candidate = @($sortedRecruitments | Where-Object { $_.QualificationRank -eq $rank } | Select-Object -First 1)
+        if ($candidate.Count) { $noticeList.Add($candidate[0]) }
     }
     foreach ($entry in $sortedRecruitments) {
         if ($noticeList.Count -ge $NoticeItems) { break }
-        if ((Get-NoticeAudienceBucket $entry) -eq 'OTHER-STATE') { continue }
         if (-not @($noticeList | Where-Object { $_.Url -eq $entry.Url }).Count) { $noticeList.Add($entry) }
     }
-    $noticeEntries = @($noticeList | Select-Object -First $NoticeItems)
+    $noticeEntries = @($noticeList | Sort-Object QualificationRank, SourceOrder | Select-Object -First $NoticeItems)
     foreach ($entry in $noticeEntries) {
         Write-Host "NOTICE [$((Get-NoticeAudienceBucket $entry))]: $($entry.Title)" -ForegroundColor Green
     }
@@ -441,6 +459,7 @@ try {
 <style>:root{--item-font:28pt}@page{size:A4 landscape;margin:5mm}*{box-sizing:border-box}html,body{margin:0;padding:0;background:#e9edf3;color:#000}body{font-family:"Nirmala UI","Segoe UI",Arial,sans-serif}.toolbar{width:287mm;margin:8px auto;padding:9px 14px;background:#fff;font:14px "Segoe UI",Arial,sans-serif}.toolbar button{padding:10px 17px;border:0;border-radius:5px;background:#0b57d0;color:#fff;font-weight:800}.sheet{width:287mm;height:200mm;margin:auto;background:#fff;padding:3mm 4mm;display:grid;grid-template-columns:minmax(0,1fr) 43mm;grid-template-rows:auto minmax(0,1fr) auto;gap:2mm;overflow:hidden}.head{grid-column:1/-1;display:flex;justify-content:space-between;align-items:end;border-bottom:2px solid #000;padding-bottom:1.4mm}.head h1{font-size:24pt;line-height:1;margin:0}.head .date{font-size:10.5pt;font-weight:800;white-space:nowrap}.content{min-width:0;display:grid;grid-template-rows:auto minmax(0,1fr);min-height:0}.section{font-size:14pt;font-weight:900;margin:0 0 1.4mm}.jobs{margin:0;padding:0;list-style:none;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));gap:2.5mm;min-height:0}.jobs li{position:relative;padding:3.2mm;border:1.7px solid #222;display:flex;align-items:center;overflow:hidden;font-size:var(--item-font);font-weight:900;line-height:1.08;min-width:0;min-height:0}.jobs li a{display:flex;flex-direction:column;justify-content:center;width:100%;height:100%;color:#000;text-decoration:none;overflow-wrap:anywhere}.last-date{display:block;margin-top:1.6mm;font-size:.54em;line-height:1.13;color:#7a0000;font-weight:900}.side{border-left:1.5px solid #000;padding-left:2.2mm;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;overflow:hidden}.side h2{font-size:14pt;line-height:1.12;margin:0 0 2mm}.qr{width:35mm;height:35mm;object-fit:contain}.qr-fallback{width:35mm;height:35mm;border:3px solid #000;display:grid;place-items:center;font-size:22pt;font-weight:900}.scan{font-size:12.5pt;line-height:1.15;font-weight:900;margin:2mm 0}.url{display:none}.all{margin-top:1.5mm;font-size:9pt;line-height:1.18;font-weight:700}.foot{grid-column:1/-1;text-align:center;border-top:1px solid #777;padding-top:.8mm;font-size:8.5pt;white-space:nowrap}.font-status{float:right;font-weight:800;padding:8px}@media print{html,body{background:#fff;width:287mm;height:200mm}.toolbar{display:none}.sheet{width:287mm;height:200mm;margin:0;padding:3mm 4mm;break-inside:avoid;page-break-inside:avoid}}</style></head><body><div class="toolbar"><button onclick="fitNotice();window.print()">A4 Print</button><span id="fontStatus" class="font-status">Auto-fit</span></div><main class="sheet"><header class="head"><h1>📢 भारत की 4 लोकप्रिय सरकारी भर्तियाँ</h1><div class="date">SANET KENDRA • $today</div></header><section class="content"><div class="section">अलीगढ़ से आवेदन योग्य • All India + UP अवसर</div><ol class="jobs">$($noticeCards -join "`r`n")</ol></section><aside class="side"><h2>सभी Jobs, Exams और Forms</h2>$qrHtml<div class="scan">QR कोड स्कैन करें</div><div class="url">$safeWebUrl</div><div class="all">मोबाइल पर पूरी verified live list देखें।</div></aside><footer class="foot">SANET KENDRA • पाला फाटक, अलीगढ़ • आवेदन से पहले official notification अवश्य जाँचें।</footer></main><script>function fitNotice(){const cards=[...document.querySelectorAll('.jobs li')].slice(0,4),status=document.getElementById('fontStatus'),sizes=[];cards.forEach(card=>{const t=card.querySelector('a')||card;let lo=19,hi=40;while(hi-lo>.25){const m=(lo+hi)/2;card.style.fontSize=m+'pt';if(t.scrollHeight>t.clientHeight+1||t.scrollWidth>t.clientWidth+1)hi=m;else lo=m}const f=Math.floor(lo*4)/4;card.style.fontSize=f+'pt';sizes.push(f)});if(sizes.length)status.textContent='Auto-fit '+Math.min(...sizes)+'–'+Math.max(...sizes)+'pt'}window.addEventListener('load',()=>{document.fonts&&document.fonts.ready?document.fonts.ready.then(fitNotice):fitNotice()});window.addEventListener('beforeprint',fitNotice);window.addEventListener('resize',fitNotice);</script></body></html>
 "@
     $html = $html.Replace('📢 भारत की 4 लोकप्रिय सरकारी भर्तियाँ', '📢 अभी आवेदन चालू — 4 प्रमुख सरकारी भर्तियाँ')
+    $html = $html.Replace('📢 अभी आवेदन चालू — 4 प्रमुख सरकारी भर्तियाँ', '📢 10वीं • 12वीं • Graduation की Latest Jobs')
     if ($html -match '</script></body></html>') {
         $html = $html.Replace('</script></body></html>', "if(new URLSearchParams(location.search).has('autoprint')){window.addEventListener('load',()=>setTimeout(()=>window.print(),1200));}</script></body></html>")
     }
